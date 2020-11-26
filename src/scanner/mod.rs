@@ -1,6 +1,7 @@
 use super::PortStrategy;
 
 mod socket_iterator;
+
 use socket_iterator::SocketIterator;
 
 use async_std::io;
@@ -31,6 +32,7 @@ pub struct Scanner {
     greppable: bool,
     port_strategy: PortStrategy,
     accessible: bool,
+    silent: bool,
 }
 
 impl Scanner {
@@ -42,6 +44,7 @@ impl Scanner {
         greppable: bool,
         port_strategy: PortStrategy,
         accessible: bool,
+        silent:bool,
     ) -> Self {
         Self {
             batch_size,
@@ -51,6 +54,7 @@ impl Scanner {
             port_strategy,
             ips: ips.iter().map(ToOwned::to_owned).collect(),
             accessible,
+            silent,
         }
     }
 
@@ -71,11 +75,11 @@ impl Scanner {
             }
         }
 
-        debug!("Start scanning sockets. \nBatch size {}\nNumber of ip-s {}\nNumber of ports {}\nTargets all together {} ", 
-            self.batch_size,
-            self.ips.len(),
-            &ports.len(),
-            (self.ips.len() * ports.len()));
+        debug!("Start scanning sockets. \nBatch size {}\nNumber of ip-s {}\nNumber of ports {}\nTargets all together {} ",
+               self.batch_size,
+               self.ips.len(),
+               &ports.len(),
+               (self.ips.len() * ports.len()));
 
         while let Some(result) = ftrs.next().await {
             if let Some(socket) = socket_iterator.next() {
@@ -116,10 +120,12 @@ impl Scanner {
                         debug!("Shutdown stream error {}", &e);
                     }
                     if !self.greppable {
-                        if self.accessible {
-                            println!("Open {}", socket.to_string());
-                        } else {
-                            println!("Open {}", socket.to_string().purple());
+                        if !self.silent {
+                            if self.accessible {
+                                println!("Open {}", socket.to_string());
+                            } else {
+                                println!("Open {}", socket.to_string().purple());
+                            }
                         }
                     }
 
@@ -164,7 +170,7 @@ impl Scanner {
             self.timeout,
             async move { TcpStream::connect(socket).await },
         )
-        .await?;
+            .await?;
         Ok(stream)
     }
 }
@@ -193,11 +199,13 @@ mod tests {
             true,
             strategy,
             true,
+            true,
         );
         block_on(scanner.run());
         // if the scan fails, it wouldn't be able to assert_eq! as it panicked!
         assert_eq!(1, 1);
     }
+
     #[test]
     fn ipv6_scanner_runs() {
         // Makes sure the program still runs and doesn't panic
@@ -215,11 +223,13 @@ mod tests {
             true,
             strategy,
             true,
+            true,
         );
         block_on(scanner.run());
         // if the scan fails, it wouldn't be able to assert_eq! as it panicked!
         assert_eq!(1, 1);
     }
+
     #[test]
     fn quad_zero_scanner_runs() {
         let addrs = vec!["0.0.0.0".parse::<IpAddr>().unwrap()];
@@ -236,10 +246,12 @@ mod tests {
             true,
             strategy,
             true,
+            true,
         );
         block_on(scanner.run());
         assert_eq!(1, 1);
     }
+
     #[test]
     fn google_dns_runs() {
         let addrs = vec!["8.8.8.8".parse::<IpAddr>().unwrap()];
@@ -256,10 +268,12 @@ mod tests {
             true,
             strategy,
             true,
+            true,
         );
         block_on(scanner.run());
         assert_eq!(1, 1);
     }
+
     #[test]
     fn infer_ulimit_lowering_no_panic() {
         // Test behaviour on MacOS where ulimit is not automatically lowered
@@ -278,6 +292,7 @@ mod tests {
             1,
             true,
             strategy,
+            true,
             true,
         );
         block_on(scanner.run());

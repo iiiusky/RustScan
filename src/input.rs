@@ -30,6 +30,17 @@ arg_enum! {
     }
 }
 
+arg_enum! {
+    /// Represents the nmap result format.
+    ///   - xml Combine the results of nmap scanning and output them as xml format results.
+    ///   - json Use xml to output the result of each nmap scan, then encode it with base64 and store it in json array, and output in json format.
+    #[derive(Deserialize, Debug, StructOpt, Clone, Copy, PartialEq)]
+    pub enum NmapResultFormat {
+        Xml,
+        Json,
+    }
+}
+
 /// Represents the range of ports to be scanned.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct PortRange {
@@ -117,11 +128,11 @@ pub struct Opts {
     /// The order of scanning to be performed. The "serial" option will
     /// scan ports in ascending order while the "random" option will scan
     /// ports randomly.
-    #[structopt(long, possible_values = &ScanOrder::variants(), case_insensitive = true, default_value = "serial")]
+    #[structopt(long, possible_values = & ScanOrder::variants(), case_insensitive = true, default_value = "serial")]
     pub scan_order: ScanOrder,
 
     /// Level of scripting required for the run.
-    #[structopt(long, possible_values = &ScriptsRequired::variants(), case_insensitive = true, default_value = "default")]
+    #[structopt(long, possible_values = & ScriptsRequired::variants(), case_insensitive = true, default_value = "default")]
     pub scripts: ScriptsRequired,
 
     /// Use the top 1000 ports.
@@ -135,6 +146,13 @@ pub struct Opts {
     /// For things like --script '(safe and vuln)' enclose it in quotations marks \"'(safe and vuln)'\"")
     #[structopt(last = true)]
     pub command: Vec<String>,
+
+    /// Silent mode, will not output any process information except the result.
+    #[structopt(long)]
+    pub silent: bool,
+
+    #[structopt(long, possible_values = & NmapResultFormat::variants(), case_insensitive = true)]
+    pub nmap_result: Option<NmapResultFormat>,
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -174,7 +192,7 @@ impl Opts {
 
         merge_required!(
             addresses, greppable, accessible, batch_size, timeout, tries, scan_order, scripts,
-            command
+            command,silent
         );
     }
 
@@ -198,7 +216,7 @@ impl Opts {
             self.ports = Some(ports);
         }
 
-        merge_optional!(range, ulimit);
+        merge_optional!(range, nmap_result, ulimit);
     }
 }
 
@@ -220,6 +238,8 @@ pub struct Config {
     scan_order: Option<ScanOrder>,
     command: Option<Vec<String>>,
     scripts: Option<ScriptsRequired>,
+    silent: Option<bool>,
+    nmap_result: Option<NmapResultFormat>,
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -264,6 +284,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::{Config, Opts, PortRange, ScanOrder, ScriptsRequired};
+
     impl Config {
         fn default() -> Self {
             Self {
@@ -279,6 +300,8 @@ mod tests {
                 accessible: Some(true),
                 scan_order: Some(ScanOrder::Random),
                 scripts: None,
+                silent: Some(false),
+                nmap_result: None
             }
         }
     }
@@ -300,6 +323,8 @@ mod tests {
                 no_config: true,
                 top: false,
                 scripts: ScriptsRequired::Default,
+                silent: true,
+                nmap_result: None,
             }
         }
     }
@@ -317,6 +342,7 @@ mod tests {
         assert_eq!(opts.timeout, 0);
         assert_eq!(opts.command, vec![] as Vec<String>);
         assert_eq!(opts.scan_order, ScanOrder::Serial);
+        assert_eq!(opts.silent, true);
     }
 
     #[test]
@@ -332,7 +358,8 @@ mod tests {
         assert_eq!(opts.command, config.command.unwrap());
         assert_eq!(opts.accessible, config.accessible.unwrap());
         assert_eq!(opts.scan_order, config.scan_order.unwrap());
-        assert_eq!(opts.scripts, ScriptsRequired::Default)
+        assert_eq!(opts.scripts, ScriptsRequired::Default);
+        assert_eq!(opts.silent, config.silent.unwrap());
     }
 
     #[test]
@@ -348,6 +375,7 @@ mod tests {
         opts.merge_optional(&config);
 
         assert_eq!(opts.range, config.range);
+        assert_eq!(opts.nmap_result, config.nmap_result);
         assert_eq!(opts.ulimit, config.ulimit);
     }
 }

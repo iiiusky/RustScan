@@ -7,7 +7,7 @@ extern crate shell_words;
 mod tui;
 
 mod input;
-use input::{Config, Opts, PortRange, ScanOrder, ScriptsRequired};
+use input::{Config, Opts, PortRange, ScanOrder, ScriptsRequired, NmapResultFormat};
 
 mod scanner;
 use scanner::Scanner;
@@ -95,6 +95,7 @@ fn main() {
 
     let ulimit: RawRlim = adjust_ulimit_size(&opts);
     let batch_size: u16 = infer_batch_size(&opts, ulimit);
+    let nmap_result_format = opts.nmap_result;
 
     let scanner = Scanner::new(
         &ips,
@@ -104,6 +105,7 @@ fn main() {
         opts.greppable,
         PortStrategy::pick(&opts.range, opts.ports, opts.scan_order),
         opts.accessible,
+        opts.silent,
     );
     debug!("Scanner finished building: {:?}", scanner);
 
@@ -132,13 +134,17 @@ fn main() {
         let x = format!("Looks like I didn't find any open ports for {:?}. This is usually caused by a high batch size.
         \n*I used {} batch size, consider lowering it with {} or a comfortable number for your system.
         \n Alternatively, increase the timeout if your ping is high. Rustscan -t 2000 for 2000 milliseconds (2s) timeout.\n",
-        ip,
-        opts.batch_size,
-        "'rustscan -b <batch_size> <ip address>'");
-        warning!(x, opts.greppable, opts.accessible);
+                        ip,
+                        opts.batch_size,
+                        "'rustscan -b <batch_size> <ip address>'");
+        if !opts.silent {
+            warning!(x, opts.greppable, opts.accessible);
+        }
     }
 
     let mut script_bench = NamedTimer::start("Scripts");
+    let mut nmap_scanner_results: Vec<String> = Vec::new();
+
     for (ip, ports) in &ports_per_ip {
         let vec_str_ports: Vec<String> = ports.iter().map(ToString::to_string).collect();
 
@@ -150,15 +156,19 @@ fn main() {
             println!("{} -> [{}]", &ip, ports_str);
             continue;
         }
-        detail!("Starting Script(s)", opts.greppable, opts.accessible);
+        if !opts.silent {
+            detail!("Starting Script(s)", opts.greppable, opts.accessible);
+        }
 
         // Run all the scripts we found and parsed based on the script config file tags field.
         for mut script_f in scripts_to_run.clone() {
-            output!(
-                format!("Script to be run {:?}\n", script_f.call_format,),
-                opts.greppable,
-                opts.accessible
-            );
+            if !opts.silent {
+                output!(
+                    format!("Script to be run {:?}\n", script_f.call_format,),
+                    opts.greppable,
+                    opts.accessible
+                );
+            }
 
             // This part allows us to add commandline arguments to the Script call_format, appending them to the end of the command.
             if !opts.command.is_empty() {
@@ -167,6 +177,13 @@ fn main() {
                 if script_f.call_format.is_some() {
                     let mut call_f = script_f.call_format.unwrap();
                     call_f.push_str(&format!(" {}", &user_extra_args.join(" ")));
+                    script_f.call_format = Some(call_f);
+                }
+                // If the value of nmap result format is not none, the -oX - parameter will be added to the nmap result
+                if !nmap_result_format.is_none() {
+                    let mut call_f = script_f.call_format.unwrap();
+                    call_f.push_str(" -oX");
+                    call_f.push_str(" -");
                     script_f.call_format = Some(call_f);
                 }
             }
@@ -183,17 +200,38 @@ fn main() {
             );
             match script.run() {
                 Ok(script_result) => {
-                    detail!(script_result.to_string(), opts.greppable, opts.accessible);
+                    if !opts.silent {
+                        detail!(script_result.to_string(), opts.greppable, opts.accessible);
+                    }else {
+                        nmap_scanner_results.push(script_result.to_string());
+                    }
                 }
                 Err(e) => {
-                    warning!(
-                        &format!("Error {}", e.to_string()),
-                        opts.greppable,
-                        opts.accessible
-                    );
+                    if !opts.silent {
+                        warning!(
+                            &format!("Error {}", e.to_string()),
+                            opts.greppable,
+                            opts.accessible
+                        );
+                    }
                 }
             }
         }
+    }
+    // Output the result of nmap according to nmap result format
+    match nmap_result_format {
+        Some(NmapResultFormat::Json) => {
+            let mut json_result: Vec<String> = Vec::new();
+
+            for result in nmap_scanner_results {
+                json_result.push(base64::encode(result));
+            }
+            println!("{}", serde_json::to_string(&json_result).expect("[]"));
+        }
+        Some(NmapResultFormat::Xml) => {
+            println!("{}", "I am xml..")
+        }
+        None => {}
     }
 
     // To use the runtime benchmark, run the process as: RUST_LOG=info ./rustscan
@@ -383,8 +421,10 @@ fn infer_batch_size(opts: &Opts, ulimit: RawRlim) -> u16 {
     // When the ulimit is higher than the batch size let the user know that the
     // batch size can be increased unless they specified the ulimit themselves.
     else if ulimit + 2 > batch_size && (opts.ulimit.is_none()) {
-        detail!(format!("File limit higher than batch size. Can increase speed by increasing batch size '-b {}'.", ulimit - 100),
-        opts.greppable, opts.accessible);
+        if !opts.silent {
+            detail!(format!("File limit higher than batch size. Can increase speed by increasing batch size '-b {}'.", ulimit - 100),
+            opts.greppable, opts.accessible);
+        }
     }
 
     batch_size
@@ -414,6 +454,7 @@ mod tests {
 
         assert!(batch_size == 3_000);
     }
+
     #[test]
     fn batch_size_equals_ulimit_lowered() {
         // because ulimit and batch size are same size, batch size is lowered
@@ -424,6 +465,7 @@ mod tests {
 
         assert!(batch_size == 4_900);
     }
+
     #[test]
     fn batch_size_adjusted_2000() {
         // ulimit == batch_size
@@ -434,6 +476,7 @@ mod tests {
 
         assert!(batch_size == 2_000);
     }
+
     #[test]
     fn test_print_opening_no_panic() {
         let mut opts = Opts::default();
@@ -486,7 +529,7 @@ mod tests {
         opts.addresses = vec!["127.0.0.1".to_owned(), "im_wrong".to_owned()];
         let ips = parse_addresses(&opts);
 
-        assert_eq!(ips, [Ipv4Addr::new(127, 0, 0, 1),]);
+        assert_eq!(ips, [Ipv4Addr::new(127, 0, 0, 1), ]);
     }
 
     #[test]
@@ -497,6 +540,7 @@ mod tests {
 
         assert_eq!(ips.is_empty(), true);
     }
+
     #[test]
     fn parse_hosts_file_and_incorrect_hosts() {
         // Host file contains IP, Hosts, incorrect IPs, incorrect hosts
